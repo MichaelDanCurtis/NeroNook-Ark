@@ -1,0 +1,15 @@
+{
+  "id": "cafe.nero.plugin.ark",
+  "name": "Odyssey Ark",
+  "version": "0.1.0",
+  "summary": "Direct local monitor status, verified audio controls and a paired Samsung remote.",
+  "capabilities": [
+    "Discovers Samsung monitors on the local network",
+    "Reads identity and audio state directly over local HTTP",
+    "Changes volume and mute with identity checks and read-back",
+    "Pairs a local Samsung remote and stores its token in Keychain",
+    "Sends explicitly selected remote navigation keys without retry",
+    "Exports reviewed audio actions through the shared plugin SDK"
+  ],
+  "apiVersion": 1
+}
