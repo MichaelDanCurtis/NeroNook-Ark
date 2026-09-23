@@ -11,5 +11,9 @@
     "Sends explicitly selected remote navigation keys without retry",
     "Exports reviewed audio actions through the shared plugin SDK"
   ],
-  "apiVersion": 1
+  "apiVersion": 1,
+  "icon": {
+    "symbol": "display",
+    "color": "83A9FF"
+  }
 }
