@@ -1,3 +1,9 @@
+# Ark 0.3.0 volume integration
+
+Ark can now handle Mac volume keys and Nero's volume display through the generic `volume-v1` SDK. Install host 0.24.0 or later, then choose Odyssey Ark in NeroNook Settings → HUD → Volume control while the Ark audio output is selected. Enable Replace system HUD and give NeroNook macOS Accessibility access for media keys. Other outputs retain their own controls; this does not add a native macOS Sound slider.
+
+The plugin resolves adjustments and mute toggles against fresh monitor readings, performs one setting write and returns confirmed state. Gestures expire before a delayed write; repeated requests are refused and busy gestures do not queue. Mute remains separate from volume. The plugin's standalone controls and older-host dashboard remain available without this optional interface. No helper app or Samsung code was added to the host.
+
 # Odyssey Ark module for NeroNook
 
 Independent native macOS plugin, version 0.2.0. Talks directly to a selected Odyssey Ark over the local network, with no companion application, installed CLI, Python runtime, cloud account, or separately running service. Requires macOS 14+ and NeroNook 0.23.0 (verified).

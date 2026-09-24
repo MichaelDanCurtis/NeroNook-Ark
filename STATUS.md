@@ -1,3 +1,11 @@
+# Ark 0.3.0 shared volume acceptance
+
+September 24, 2026. Installed independently with host 0.24.0. The optional volume-v1 interface advertises the exact saved monitor as a physical endpoint. It returns confirmed normalized volume/mute with the device read time, accepts only fresh negotiated commands and refuses repeated IDs, stale targets and expired gestures. Relative steps and mute toggles read the device first. The deadline is checked again before a setting write; nothing is queued or retried. Volume preserves mute. Standalone and older-host behavior remain available.
+
+19 Swift tests pass, including fresh toggle/read-back, SDK quantization and commands expiring both before and during device reads. The signed actual-process harness verifies negotiation and invalid-target refusal without writes. Vendored SDK hashes match host 0.24.0. The installed executable matches the signed build. In NeroNook Settings → HUD, Odyssey Ark was selected only for the existing Odyssey Ark audio output; Check control returned Confirmed by Odyssey Ark at the unchanged 16% volume. The confirmed volume was visually checked in the closed laptop Nook. The binding survived final host relaunch; disabling Ark made the saved control unavailable, and re-enabling recovered at 16%. Audio output selection and monitor volume/mute were not changed.
+
+NeroNook currently lacks macOS Accessibility access for intercepted media keys. The owner has been asked to enable it and check volume up/down, mute and the Nook volume display. Physical keys/HUD drag, actual output switching, wake/network recovery remain pending. Host tests cover those routing boundaries in fixtures, not physical acceptance. The native macOS Sound slider is unchanged; direct brightness/input/rear-light controls remain outside this milestone.
+
 # Ark module 0.2.0 acceptance
 
 September 24, 2026. Independently packaged and installed; host runtime remains 0.23.0.

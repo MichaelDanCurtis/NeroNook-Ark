@@ -23,6 +23,8 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
     @Published var lastRead: Date?
     @Published var showSetup = false
     private var customViews = false
+    private var volumeInterface = false
+    private var recentVolumeRequests: [UUID: Double] = [:]
     private let client: ArkClient
     init(client: ArkClient = ArkClient()) { self.client = client; super.init() }
     private let remote = ArkRemote()
@@ -66,8 +68,9 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         guard message.pluginID == moduleID else { NSApp.terminate(nil); return }
         if session == nil {
             guard message.type == "hello" else { NSApp.terminate(nil); return }; session = message.session
+            volumeInterface = message.features?.contains("volume-v1") == true
             customViews = message.features?.contains("custom-views-v1") == true
-            emit("ready", features: ["actions-v1", "dashboard-v1", "panels-v1"] + (customViews ? ["custom-views-v1"] : []))
+            emit("ready", features: ["actions-v1", "dashboard-v1", "panels-v1"] + (customViews ? ["custom-views-v1"] : []) + (volumeInterface ? ["volume-v1"] : []))
             let device = PluginParameter("device", .string)
             send(.init(.register, registration: .init(actions: [
                 .init("read_status", title: "Read Ark status", output: statusSchema),
@@ -77,6 +80,9 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
             refresh(); publish(); return
         }
         guard message.session == session else { NSApp.terminate(nil); return }
+        if message.type == "volumeCommand", let command = message.volumeCommand {
+            handleVolume(command); return
+        }
         if message.type == "visibility" { visible = message.visible ?? false }
         if message.type == "action" {
             switch message.action { case "configure": showSetup = true; showWindow(); case "controls": showWindow(); case "refresh": refresh(); default: break }
@@ -105,6 +111,38 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         if connected, let volume = audio?.volume { value["volume"] = .number(Double(volume)) }
         if connected, let muted = audio?.muted { value["muted"] = .boolean(muted) }
         return value
+    }
+    var volumeEndpoint: PluginVolumeEndpoint? {
+        guard !settings.deviceID.isEmpty else { return nil }
+        return .init(id: settings.deviceID, name: "Odyssey Ark", available: connected,
+            volume: audio?.volume.map { Double($0) / 100 }, muted: audio?.muted,
+            canSetVolume: canVolume, canMute: canMute, observedAt: lastRead?.timeIntervalSince1970 ?? 0)
+    }
+    static func audioCommand(_ operation: PluginVolumeOperation) throws -> AudioCommand {
+        try operation.validate()
+        switch operation {
+        case .setVolume(let n): return .volume(Int((n * 100).rounded()))
+        case .adjustVolume(let n): return .adjustVolume(n > 0 ? max(1, Int((n * 100).rounded())) : min(-1, Int((n * 100).rounded())))
+        case .setMuted(let n): return .mute(n)
+        case .toggleMute: return .toggleMute
+        }
+    }
+    private func handleVolume(_ command: PluginVolumeCommand) {
+        let reply: (Error?) -> Void = { [weak self] error in
+            guard let self else { return }
+            self.emit("volumeResult", volumeResult: .init(requestID: command.requestID, endpointID: command.endpointID,
+                state: error == nil ? self.volumeEndpoint : nil, error: error.map { String($0.localizedDescription.prefix(350)) }))
+        }
+        do {
+            guard volumeInterface else { throw ArkError("Volume interface was not negotiated.") }
+            try command.validate()
+            let now = Date().timeIntervalSince1970
+            recentVolumeRequests = recentVolumeRequests.filter { $0.value > now }
+            guard recentVolumeRequests[command.requestID] == nil, recentVolumeRequests.count < 256 else { throw ArkError("Repeated volume gesture refused.") }
+            recentVolumeRequests[command.requestID] = command.expiresAt
+            guard command.endpointID == settings.deviceID else { throw ArkError("The selected monitor changed. No change sent.") }
+            apply(try Self.audioCommand(command.operation), expiresAt: command.expiresAt, completed: reply)
+        } catch { reply(error) }
     }
     func discover() {
         guard !busy else { return }; cancelRefresh(); busy = true; notice = "Looking for Samsung displays on your network…"
@@ -167,17 +205,17 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         guard (volume != nil) != (muted != nil) else { finish("Choose one audio setting.", request: request, failed: true); return }
         apply(volume.map(AudioCommand.volume) ?? .mute(muted!), request: request)
     }
-    func apply(_ command: AudioCommand, request: UUID? = nil) {
-        guard !busy, connected, let service else { finish("Monitor unavailable or busy. No change sent.", request: request, failed: true); return }
+    func apply(_ command: AudioCommand, request: UUID? = nil, expiresAt: Double? = nil, completed: ((Error?) -> Void)? = nil) {
+        guard !busy, connected, let service else { let error = ArkError("Monitor unavailable or busy. No change sent."); finish(error.localizedDescription, request: request, failed: true); completed?(error); return }
         let host = settings.host, id = settings.deviceID
         cancelRefresh(); busy = true; notice = "Waiting for the monitor to confirm…"
         Task {
             defer { busy = false; publish() }
             do {
-                audio = try await client.change(Endpoint(host), id: id, service: service, command: command)
+                audio = try await client.change(Endpoint(host), id: id, service: service, command: command, expiresAt: expiresAt)
                 lastRead = Date(); status = "Ark · Volume \(self.volume)\(audio?.muted == true ? " · Muted" : "")"
-                finish("Audio setting confirmed by the monitor.", request: request)
-            } catch { connected = false; audio = nil; finish(error.localizedDescription, request: request, failed: true) }
+                finish("Audio setting confirmed by the monitor.", request: request); completed?(nil)
+            } catch { connected = false; audio = nil; finish(error.localizedDescription, request: request, failed: true); completed?(error) }
         }
     }
     func pair() {
@@ -215,14 +253,15 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         if let request { send(.init(.update, requestID: request, update: .init(failed ? .failed : .succeeded, message: String(text.prefix(280)), values: failed ? [:] : ["message": .string(String(text.prefix(280)))]))) }
     }
     private func send(_ bus: PluginBusMessage) { emit("bus", bus: bus) }
-    private func emit(_ type: String, features: [String]? = nil, snapshot: PluginSnapshot? = nil, bus: PluginBusMessage? = nil) {
+    private func emit(_ type: String, features: [String]? = nil, snapshot: PluginSnapshot? = nil, bus: PluginBusMessage? = nil, volumeResult: PluginVolumeResult? = nil) {
         guard let session else { return }; if type != "ready" { sequence += 1 }
-        do { try FileHandle.standardOutput.write(contentsOf: PluginMessage(type: type, pluginID: moduleID, session: session, sequence: sequence, snapshot: snapshot, features: features, bus: bus).encoded()) } catch { NSApp.terminate(nil) }
+        do { try FileHandle.standardOutput.write(contentsOf: PluginMessage(type: type, pluginID: moduleID, session: session, sequence: sequence, snapshot: snapshot, features: features, bus: bus, volumeResult: volumeResult).encoded()) } catch { NSApp.terminate(nil) }
     }
     func publish() {
-        let snapshot = PluginSnapshot(title: "Odyssey Ark", status: status, activity: connected ? "Ark · Volume \(volume)\(audio?.muted == true ? " · Muted" : "")" : "Ark · offline",
+        var snapshot = PluginSnapshot(title: "Odyssey Ark", status: status, activity: connected ? "Ark · Volume \(volume)\(audio?.muted == true ? " · Muted" : "")" : "Ark · offline",
             actions: customViews ? [] : [.init("controls", "Monitor controls", symbol: "slider.horizontal.3")], badge: connected ? "Connected" : "Setup needed",
             panels: [customViews ? .init("monitor", "Monitor", customView: surface) : .init("monitor", "Monitor", sections: [.init("Odyssey Ark", "Open Monitor controls for sound and remote navigation. Upgrade NeroNook for controls inside the Nook.")])])
+        if volumeInterface { snapshot.volumeEndpoints = volumeEndpoint.map { [$0] } ?? [] }
         emit("snapshot", snapshot: snapshot); send(.init(.publish, address: .init(moduleID, "status"), values: values, lifetime: 8))
     }
     func showWindow() {

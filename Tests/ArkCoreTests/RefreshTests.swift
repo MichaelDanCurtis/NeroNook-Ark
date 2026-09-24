@@ -1,6 +1,7 @@
 import XCTest
 @testable import ArkPlugin
 import ArkCore
+import NookPluginSDK
 
 private actor DelayedMonitor: HTTPTransport {
     private var volume = 50
@@ -28,6 +29,14 @@ private actor DelayedMonitor: HTTPTransport {
     }
 }
 final class RefreshTests: XCTestCase {
+    @MainActor func testSDKVolumeQuantizationAndBounds() throws {
+        XCTAssertEqual(try ArkModule.audioCommand(.adjustVolume(1.0/16)), .adjustVolume(6))
+        XCTAssertEqual(try ArkModule.audioCommand(.adjustVolume(-1.0/64)), .adjustVolume(-2))
+        XCTAssertEqual(try ArkModule.audioCommand(.setVolume(0.16)), .volume(16))
+        XCTAssertEqual(try ArkModule.audioCommand(.toggleMute), .toggleMute)
+        XCTAssertThrowsError(try ArkModule.audioCommand(.setVolume(2)))
+    }
+
     @MainActor func testLatePollCannotOverwriteConfirmedUserCommand() async throws {
         let transport = DelayedMonitor()
         let module = ArkModule(client: ArkClient(transport: transport))

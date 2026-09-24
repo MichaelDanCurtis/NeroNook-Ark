@@ -1,7 +1,7 @@
 {
   "id": "cafe.nero.plugin.ark",
   "name": "Odyssey Ark",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "summary": "Sound and a paired remote directly in your Nook, with live monitor read-back.",
   "capabilities": [
     "Discovers Samsung monitors on the local network",
@@ -9,7 +9,8 @@
     "Changes volume and mute with identity checks and read-back",
     "Pairs a local Samsung remote and stores its token in Keychain",
     "Sends explicitly selected remote navigation keys without retry",
-    "Exports reviewed audio actions through the shared plugin SDK"
+    "Exports reviewed audio actions through the shared plugin SDK",
+    "Controls volume keys and the Nook HUD only when selected for a Mac audio output"
   ],
   "apiVersion": 1,
   "icon": {

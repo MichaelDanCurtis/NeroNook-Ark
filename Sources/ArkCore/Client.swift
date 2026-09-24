@@ -57,13 +57,15 @@ public struct ArkClient: Sendable {
         guard (volume != nil) != (muted != nil), volume.map({ (0...100).contains($0) }) ?? true else { throw ArkError("Choose one valid audio setting.") }
         return try await change(endpoint, id: id, service: service, command: volume.map(AudioCommand.volume) ?? .mute(muted!))
     }
-    public func change(_ endpoint: Endpoint, id: String, service: RenderingService, command: AudioCommand) async throws -> AudioState {
+    public func change(_ endpoint: Endpoint, id: String, service: RenderingService, command: AudioCommand, expiresAt: Double? = nil) async throws -> AudioState {
         try command.validate()
+        if let expiresAt, expiresAt <= Date().timeIntervalSince1970 { throw ArkError("Volume gesture expired. No change sent.") }
         _ = try await info(endpoint, expectedID: id)
         let action = command.action, readAction = command.readAction
         guard service.actions.contains(action), service.actions.contains(readAction) else { throw ArkError("This control cannot be verified on the monitor.") }
         let before = try await audio(endpoint, service: service)
         let desired = try command.desiredValue(after: before)
+        if let expiresAt, expiresAt <= Date().timeIntervalSince1970 { throw ArkError("Volume gesture expired while reading. No change sent.") }
         do {
             let response = try await soap(endpoint, service, action: action, value: desired)
             guard try XMLTree(response).nodes(named: "Fault").isEmpty else { throw ArkError("The monitor rejected the setting.") }

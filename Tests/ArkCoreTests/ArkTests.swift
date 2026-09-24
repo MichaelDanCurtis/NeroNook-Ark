@@ -4,8 +4,10 @@ import XCTest
 private actor StubHTTP: HTTPTransport {
     var responses: [Data]
     var requests: [URLRequest] = []
-    init(_ responses: [String]) { self.responses = responses.map { Data($0.utf8) } }
+    var delay: UInt64 = 0
+    init(_ responses: [String], delay: UInt64 = 0) { self.responses = responses.map { Data($0.utf8) }; self.delay = delay }
     func send(_ request: URLRequest) async throws -> Data {
+        if delay > 0 { try await Task.sleep(nanoseconds: delay) }
         requests.append(request); guard !responses.isEmpty else { throw ArkError("Unexpected request") }; return responses.removeFirst()
     }
 }
@@ -101,7 +103,7 @@ final class ArkTests: XCTestCase {
         XCTAssertEqual(try AudioCommand.adjustVolume(-1).desiredValue(after: .init(volume: 0, muted: false)), 0)
         XCTAssertThrowsError(try AudioCommand.adjustVolume(1).desiredValue(after: .init(volume: nil, muted: false)))
         XCTAssertThrowsError(try AudioCommand.adjustVolume(0).validate())
-        XCTAssertThrowsError(try AudioCommand.adjustVolume(10).validate())
+        XCTAssertThrowsError(try AudioCommand.adjustVolume(26).validate())
         XCTAssertThrowsError(try AudioCommand.volume(101).validate())
     }
     func testInvalidStepDoesNotContactMonitor() async throws {
@@ -122,6 +124,33 @@ final class ArkTests: XCTestCase {
         for (id, host, connected) in [("other", "192.168.1.153", true), ("ark", "192.168.1.154", true), ("ark", "192.168.1.153", false), ("", "192.168.1.153", true)] {
             XCTAssertThrowsError(try ControlTarget.validate(device: id, host: host, selectedDevice: "ark", selectedHost: "192.168.1.153", connected: connected))
         }
+    }
+
+    func testToggleUsesFreshMuteStateAndOneWrite() async throws {
+        let muted = mute.replacingOccurrences(of: ">0<", with: ">1<")
+        let transport = StubHTTP([info, volume, muted, "<SetMuteResponse/>", volume, mute])
+        let result = try await ArkClient(transport: transport).change(Endpoint("192.168.1.153"), id: "fixture-monitor", service: service, command: .toggleMute)
+        XCTAssertEqual(result.muted, false)
+        let requests = await transport.requests
+        let writes = requests.filter { $0.value(forHTTPHeaderField: "SOAPAction")?.contains("#Set") == true }
+        XCTAssertEqual(writes.count, 1)
+        XCTAssertTrue(String(decoding: writes[0].httpBody!, as: UTF8.self).contains("<DesiredMute>0</DesiredMute>"))
+    }
+    func testExpiredGestureNeverContactsDevice() async throws {
+        let transport = StubHTTP([])
+        do { _ = try await ArkClient(transport: transport).change(Endpoint("192.168.1.153"), id: "fixture-monitor", service: service, command: .volume(16), expiresAt: 1); XCTFail("Expired gesture") } catch {}
+        let count = await transport.requests.count; XCTAssertEqual(count, 0)
+    }
+
+    func testGestureExpiringDuringReadsNeverWrites() async throws {
+        let transport = StubHTTP([info, volume, mute], delay: 20_000_000)
+        do {
+            _ = try await ArkClient(transport: transport).change(Endpoint("192.168.1.153"), id: "fixture-monitor", service: service, command: .volume(16), expiresAt: Date().timeIntervalSince1970 + 0.01)
+            XCTFail("Gesture expired during reads")
+        } catch {}
+        let requests = await transport.requests
+        XCTAssertFalse(requests.contains { $0.value(forHTTPHeaderField: "SOAPAction")?.contains("#Set") == true })
+        XCTAssertEqual(requests.count, 3)
     }
 
 }
