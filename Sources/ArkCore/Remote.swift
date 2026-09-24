@@ -48,6 +48,7 @@ private final class MonitorTLS: NSObject, URLSessionTaskDelegate, @unchecked Sen
     private var session: URLSession?
     private var watchdog: Task<Void, Never>?
     public private(set) var connected = false
+    public private(set) var connecting = false
     public var onCertificate: ((String) -> Void)?
     private var generation = UUID()
     public var onChange: ((String, String?) -> Void)?
@@ -56,7 +57,7 @@ private final class MonitorTLS: NSObject, URLSessionTaskDelegate, @unchecked Sen
         generation = UUID()
         watchdog?.cancel(); watchdog = nil
         task?.cancel(with: .goingAway, reason: nil); task = nil
-        session?.invalidateAndCancel(); session = nil; connected = false
+        session?.invalidateAndCancel(); session = nil; connected = false; connecting = false
     }
     public func connect(_ endpoint: Endpoint, token: String?, certificate: String?) {
         disconnect()
@@ -69,7 +70,7 @@ private final class MonitorTLS: NSObject, URLSessionTaskDelegate, @unchecked Sen
             Task { @MainActor in guard let self, self.generation == attempt else { return }; self.onCertificate?(fingerprint) }
         }
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil); self.session = session
-        let socket = session.webSocketTask(with: url.url!); socket.maximumMessageSize = 262144; task = socket; socket.resume()
+        let socket = session.webSocketTask(with: url.url!); socket.maximumMessageSize = 262144; task = socket; socket.resume(); connecting = true
         onChange?("Approve NeroNook Ark on the monitor…", nil)
         watchdog = Task { [weak self, weak socket] in
             try? await Task.sleep(for: .seconds(35))
@@ -85,11 +86,11 @@ private final class MonitorTLS: NSObject, URLSessionTaskDelegate, @unchecked Sen
                     let data: Data
                     switch message { case .data(let d): data = d; case .string(let s): data = Data(s.utf8); @unknown default: continue }
                     let reply = try PairingReply(data)
-                    if reply.connected { self.connected = true; self.watchdog?.cancel(); self.onChange?("Remote connected", reply.token) }
+                    if reply.connected { self.connected = true; self.connecting = false; self.watchdog?.cancel(); self.onChange?("Remote connected", reply.token) }
                 }
             } catch {
                 guard let self, self.task === socket else { return }
-                self.task?.cancel(with: .goingAway, reason: nil); self.task = nil; self.connected = false; self.watchdog?.cancel(); self.session?.invalidateAndCancel(); self.session = nil; self.onChange?(error is ArkError ? error.localizedDescription : "Remote disconnected. Pair or reconnect to continue.", nil)
+                self.task?.cancel(with: .goingAway, reason: nil); self.task = nil; self.connected = false; self.connecting = false; self.watchdog?.cancel(); self.session?.invalidateAndCancel(); self.session = nil; self.onChange?(error is ArkError ? error.localizedDescription : "Remote disconnected. Pair or reconnect to continue.", nil)
             }
         }
     }

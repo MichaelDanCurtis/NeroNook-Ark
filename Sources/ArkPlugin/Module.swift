@@ -17,16 +17,23 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
     @Published var busy = false
     @Published var connected = false
     @Published var remoteReady = false
+    @Published var remoteConnecting = false
     @Published var certificateCandidate = ""
     @Published var remoteStatus = "Remote not connected"
     @Published var lastRead: Date?
-    private let client = ArkClient()
+    @Published var showSetup = false
+    private var customViews = false
+    private let client: ArkClient
+    init(client: ArkClient = ArkClient()) { self.client = client; super.init() }
     private let remote = ArkRemote()
     private let input = InputReader()
     private var session: UUID?
     private var sequence: UInt64 = 0
     private var timer: Timer?
     private var ticks = 0
+    private var refreshTask: Task<Void, Never>?
+    private var readGeneration = UUID()
+    @Published var refreshing = false
     private var visible = true
     private var window: NSWindow?
     private var runs = Set<UUID>()
@@ -44,7 +51,7 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
             self.publish()
         }
         remote.onChange = { [weak self] text, token in
-            guard let self else { return }; self.remoteStatus = text; self.remoteReady = self.remote.connected
+            guard let self else { return }; self.remoteStatus = text; self.remoteReady = self.remote.connected; self.remoteConnecting = self.remote.connecting
             if let token { do { try PairingStore.save(token, for: self.settings.deviceID) } catch { self.notice = "Remote connected, but its pairing token could not be saved in Keychain." } }
             self.publish()
         }
@@ -52,26 +59,30 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         else { showWindow(); refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in
             guard let self else { return }; self.publish(); self.ticks += 1
-            if self.ticks % (self.visible ? 4 : 15) == 0 { self.refresh() }
+            if self.ticks % ((self.visible || self.window?.isVisible == true) ? 2 : 15) == 0 { self.refresh() }
         } }
     }
     private func receive(_ message: PluginMessage) {
         guard message.pluginID == moduleID else { NSApp.terminate(nil); return }
         if session == nil {
             guard message.type == "hello" else { NSApp.terminate(nil); return }; session = message.session
-            emit("ready", features: ["actions-v1", "dashboard-v1", "panels-v1", "diagrams-v1"])
+            customViews = message.features?.contains("custom-views-v1") == true
+            emit("ready", features: ["actions-v1", "dashboard-v1", "panels-v1"] + (customViews ? ["custom-views-v1"] : []))
             let device = PluginParameter("device", .string)
             send(.init(.register, registration: .init(actions: [
-                .init("read_status", title: "Read Ark status", output: .init([.init("connected", .boolean), .init("device", .string), .init("message", .string)])),
+                .init("read_status", title: "Read Ark status", output: statusSchema),
                 .init("set_volume", title: "Set Ark volume", input: .init([device, .init("volume", .number, minimum: 0, maximum: 100)]), output: .init([.init("message", .string)]), effect: .externalChange, timeoutSeconds: 60),
                 .init("set_mute", title: "Set Ark mute", input: .init([device, .init("muted", .boolean)]), output: .init([.init("message", .string)]), effect: .externalChange, timeoutSeconds: 60)
-            ], channels: [.init("status", title: "Ark status", kind: .state, schema: .init([.init("connected", .boolean), .init("device", .string), .init("message", .string)]))])))
+            ], channels: [.init("status", title: "Ark status", kind: .state, schema: statusSchema)])))
             refresh(); publish(); return
         }
         guard message.session == session else { NSApp.terminate(nil); return }
         if message.type == "visibility" { visible = message.visible ?? false }
         if message.type == "action" {
-            switch message.action { case "configure", "controls": showWindow(); case "refresh": refresh(); default: break }
+            switch message.action { case "configure": showSetup = true; showWindow(); case "controls": showWindow(); case "refresh": refresh(); default: break }
+        }
+        if message.type == "viewEvent", let event = message.viewEvent {
+            do { try handleView(event) } catch { notice = error.localizedDescription }; publish(); return
         }
         if message.type == "bus", let bus = message.bus, bus.operation == .execute { execute(bus) }
     }
@@ -84,9 +95,19 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         else if bus.address?.name == "set_mute", case .boolean(let value)? = bus.values?["muted"] { apply(muted: value, request: bus.requestID) }
         else { finish("Unsupported action or invalid setting.", request: bus.requestID, failed: true) }
     }
-    var values: [String: PluginValue] { ["connected": .boolean(connected), "device": .string(settings.deviceID), "message": .string(String(status.prefix(280)))] }
+    var statusSchema: PluginValueSchema { .init([
+        .init("connected", .boolean), .init("device", .string), .init("message", .string),
+        .init("volume", .number, required: false, minimum: 0, maximum: 100), .init("muted", .boolean, required: false),
+        .init("can_set_volume", .boolean), .init("can_set_mute", .boolean)
+    ]) }
+    var values: [String: PluginValue] {
+        var value: [String: PluginValue] = ["connected": .boolean(connected), "device": .string(settings.deviceID), "message": .string(String(status.prefix(280))), "can_set_volume": .boolean(canVolume), "can_set_mute": .boolean(canMute)]
+        if connected, let volume = audio?.volume { value["volume"] = .number(Double(volume)) }
+        if connected, let muted = audio?.muted { value["muted"] = .boolean(muted) }
+        return value
+    }
     func discover() {
-        guard !busy else { return }; busy = true; notice = "Looking for Samsung displays on your network…"
+        guard !busy else { return }; cancelRefresh(); busy = true; notice = "Looking for Samsung displays on your network…"
         Task {
             var found: [String] = []
             for host in await Discovery.samsungHosts() {
@@ -98,7 +119,7 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         }
     }
     func connect() {
-        guard !busy else { return }; busy = true; remote.disconnect(); remoteReady = false; remoteStatus = "Remote not connected"
+        guard !busy else { return }; cancelRefresh(); busy = true; remote.disconnect(); remoteReady = false; remoteConnecting = false; remoteStatus = "Remote not connected"
         connected = false; audio = nil; service = nil; notice = "Checking the monitor…"
         let host = draftHost.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
@@ -112,36 +133,55 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
             } catch { fail(error) }
         }
     }
+    private func cancelRefresh() {
+        readGeneration = UUID(); refreshTask?.cancel(); refreshTask = nil; refreshing = false
+    }
     func refresh() {
-        guard !busy, !settings.host.isEmpty, !settings.deviceID.isEmpty else { return }; busy = true
-        Task {
-            defer { busy = false; publish() }
-            do { try await read(Endpoint(settings.host)) } catch { fail(error) }
+        guard !busy, refreshTask == nil, !settings.host.isEmpty, !settings.deviceID.isEmpty else { return }
+        let generation = UUID(); readGeneration = generation; refreshing = true
+        let host = settings.host
+        refreshTask = Task {
+            defer { if readGeneration == generation { refreshTask = nil; refreshing = false; publish() } }
+            do { try await read(Endpoint(host), generation: generation) }
+            catch { if readGeneration == generation { fail(error) } }
         }
     }
-    private func read(_ endpoint: Endpoint) async throws {
-        let value = try await client.info(endpoint, expectedID: settings.deviceID); info = value; connected = true; lastRead = Date()
+    private func read(_ endpoint: Endpoint, generation: UUID? = nil) async throws {
+        let value = try await client.info(endpoint, expectedID: settings.deviceID)
+        var found = service
+        var state: AudioState?
+        var audioError: String?
         do {
-            if service == nil { service = try await client.service(endpoint) }
-            if let service { audio = try await client.audio(endpoint, service: service) }
-            status = "Ark · Volume \(volume)\(audio?.muted == true ? " · Muted" : "")"
-        } catch { audio = nil; service = nil; status = "Ark connected · audio unavailable"; notice = error.localizedDescription }
+            if found == nil { found = try await client.service(endpoint) }
+            if let found { state = try await client.audio(endpoint, service: found) }
+        } catch { found = nil; audioError = error.localizedDescription }
+        // A user command invalidates an older poll before it can overwrite the command result.
+        guard generation == nil || generation == readGeneration else { throw CancellationError() }
+        try Task.checkCancellation()
+        info = value; connected = true; service = found; audio = state; lastRead = Date()
+        if let audioError { status = "Ark connected · audio unavailable"; notice = audioError }
+        else { status = "Ark · Volume \(volume)\(audio?.muted == true ? " · Muted" : "")" }
     }
-    private func fail(_ error: Error) { connected = false; audio = nil; service = nil; remote.disconnect(); remoteReady = false; remoteStatus = "Remote not connected"; status = "Ark unavailable"; notice = String(error.localizedDescription.prefix(350)) }
+    private func fail(_ error: Error) { connected = false; audio = nil; service = nil; remote.disconnect(); remoteReady = false; remoteConnecting = false; remoteStatus = "Remote not connected"; status = "Ark unavailable"; notice = String(error.localizedDescription.prefix(350)) }
     func apply(volume: Int? = nil, muted: Bool? = nil, request: UUID? = nil) {
-        guard !busy, connected, let service else { if let request { finish("Monitor unavailable.", request: request, failed: true) }; return }
-        busy = true
+        guard (volume != nil) != (muted != nil) else { finish("Choose one audio setting.", request: request, failed: true); return }
+        apply(volume.map(AudioCommand.volume) ?? .mute(muted!), request: request)
+    }
+    func apply(_ command: AudioCommand, request: UUID? = nil) {
+        guard !busy, connected, let service else { finish("Monitor unavailable or busy. No change sent.", request: request, failed: true); return }
+        let host = settings.host, id = settings.deviceID
+        cancelRefresh(); busy = true; notice = "Waiting for the monitor to confirm…"
         Task {
             defer { busy = false; publish() }
             do {
-                audio = try await client.set(Endpoint(settings.host), id: settings.deviceID, service: service, volume: volume, muted: muted)
+                audio = try await client.change(Endpoint(host), id: id, service: service, command: command)
                 lastRead = Date(); status = "Ark · Volume \(self.volume)\(audio?.muted == true ? " · Muted" : "")"
                 finish("Audio setting confirmed by the monitor.", request: request)
             } catch { connected = false; audio = nil; finish(error.localizedDescription, request: request, failed: true) }
         }
     }
     func pair() {
-        guard !busy, connected else { return }; busy = true
+        guard !busy, connected, !remoteConnecting else { return }; cancelRefresh(); busy = true
         Task {
             defer { busy = false; publish() }
             do {
@@ -157,11 +197,11 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         catch { notice = "Could not save the monitor certificate." }
     }
     func forgetPairing() {
-        remote.disconnect(); remoteReady = false
+        remote.disconnect(); remoteReady = false; remoteConnecting = false
         do { try PairingStore.remove(settings.deviceID); remoteStatus = "Pairing token removed from this Mac." } catch { remoteStatus = "Could not remove the pairing token." }
     }
     func press(_ key: RemoteKey) {
-        guard !busy, connected, remoteReady else { return }; busy = true
+        guard !busy, connected, remoteReady else { return }; cancelRefresh(); busy = true
         Task {
             defer { busy = false; publish() }
             do {
@@ -181,15 +221,14 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
     }
     func publish() {
         let snapshot = PluginSnapshot(title: "Odyssey Ark", status: status, activity: connected ? "Ark · Volume \(volume)\(audio?.muted == true ? " · Muted" : "")" : "Ark · offline",
-            actions: [.init("controls", "Monitor controls", symbol: "slider.horizontal.3"), .init("refresh", "Refresh", enabled: !busy, symbol: "arrow.clockwise")], badge: connected ? "Connected" : "Setup needed",
-            panels: [.init("monitor", "Monitor", diagrams: [arkDiagram(model: info?.device.modelName, volume: volume, muted: audio?.muted, connected: connected, remote: remoteReady)]),
-                     .init("connection", "Connection", sections: [.init("Monitor", info?.device.modelName ?? "Not connected"), .init("Network address", settings.host.isEmpty ? "Not set" : settings.host), .init("Last verified", lastRead?.formatted(date: .omitted, time: .standard) ?? "No live response yet"), .init("Remote", remoteStatus), .init("Available controls", "HTTP volume and mute with read-back. Paired remote navigation. Brightness, picture modes, KVM and Multi View are not exposed as verified direct controls."), .init("Latest result", notice)])])
+            actions: customViews ? [] : [.init("controls", "Monitor controls", symbol: "slider.horizontal.3")], badge: connected ? "Connected" : "Setup needed",
+            panels: [customViews ? .init("monitor", "Monitor", customView: surface) : .init("monitor", "Monitor", sections: [.init("Odyssey Ark", "Open Monitor controls for sound and remote navigation. Upgrade NeroNook for controls inside the Nook.")])])
         emit("snapshot", snapshot: snapshot); send(.init(.publish, address: .init(moduleID, "status"), values: values, lifetime: 8))
     }
     func showWindow() {
         if window == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 710), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-            w.title = "Odyssey Ark controls"; w.contentView = NSHostingView(rootView: ArkSettings(model: self)); w.isReleasedWhenClosed = false; w.center(); window = w
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 450), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+            w.title = "Odyssey Ark controls"; w.contentView = NSHostingView(rootView: ArkWindow(model: self)); w.isReleasedWhenClosed = false; w.center(); window = w
         }
         window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }

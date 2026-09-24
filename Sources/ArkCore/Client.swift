@@ -55,16 +55,20 @@ public struct ArkClient: Sendable {
     }
     public func set(_ endpoint: Endpoint, id: String, service: RenderingService, volume: Int? = nil, muted: Bool? = nil) async throws -> AudioState {
         guard (volume != nil) != (muted != nil), volume.map({ (0...100).contains($0) }) ?? true else { throw ArkError("Choose one valid audio setting.") }
+        return try await change(endpoint, id: id, service: service, command: volume.map(AudioCommand.volume) ?? .mute(muted!))
+    }
+    public func change(_ endpoint: Endpoint, id: String, service: RenderingService, command: AudioCommand) async throws -> AudioState {
+        try command.validate()
         _ = try await info(endpoint, expectedID: id)
-        let action = volume != nil ? "SetVolume" : "SetMute"
-        let readAction = volume != nil ? "GetVolume" : "GetMute"
+        let action = command.action, readAction = command.readAction
         guard service.actions.contains(action), service.actions.contains(readAction) else { throw ArkError("This control cannot be verified on the monitor.") }
-        _ = try await audio(endpoint, service: service)
+        let before = try await audio(endpoint, service: service)
+        let desired = try command.desiredValue(after: before)
         do {
-            let response = try await soap(endpoint, service, action: action, value: volume ?? (muted! ? 1 : 0))
+            let response = try await soap(endpoint, service, action: action, value: desired)
             guard try XMLTree(response).nodes(named: "Fault").isEmpty else { throw ArkError("The monitor rejected the setting.") }
             let after = try await audio(endpoint, service: service)
-            guard volume == nil || after.volume == volume, muted == nil || after.muted == muted else { throw ArkError("The setting did not match its read-back.") }
+            guard command.matches(after, desired: desired) else { throw ArkError("The setting did not match its read-back.") }
             return after
         } catch { throw ArkError("Could not confirm the change. It may have applied; refresh before trying again. No retry was sent.") }
     }

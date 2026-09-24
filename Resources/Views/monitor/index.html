@@ -1,0 +1,20 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="monitor.css"><title>Odyssey Ark controls</title></head>
+<body><main>
+<header><div><span class="eyebrow">YOUR DISPLAY</span><h1>Odyssey Ark</h1></div><span id="connection" class="connection">Connecting</span><button id="refresh" class="icon" aria-label="Refresh monitor" title="Refresh monitor">↻</button><button id="settings" class="icon" aria-label="Monitor setup" title="Monitor setup"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1Z"/><circle cx="12" cy="12" r="3"/></svg></button></header>
+<div class="content">
+<section class="sound">
+<div class="monitor"><img src="ark.svg" alt="Illustration of a curved Odyssey Ark monitor"><div class="monitor-caption"><span id="model">Samsung display</span><span id="resolution">Direct local connection</span></div></div>
+<div class="card audio-card"><div class="volume-header"><label for="volume-number">Monitor volume</label><span id="audio-status">Waiting for a reading</span></div>
+<form id="volume-form"><input id="volume-number" type="number" required min="0" max="100" step="1" aria-label="Monitor volume"><span class="outof">/ 100</span><button id="set-volume" class="set" type="submit">Set</button><div class="mute-segments"><button type="button" id="sound-on" aria-pressed="false">Sound on</button><button type="button" id="muted" aria-pressed="false">Muted</button></div></form>
+<div class="slider-line"><button id="minus" class="step" aria-label="Volume down one">−</button><input id="volume-slider" type="range" min="0" max="100" step="1" aria-label="Monitor volume slider"><button id="plus" class="step" aria-label="Volume up one">+</button></div>
+</div>
+</section>
+<section class="card remote-card"><div class="remote-heading"><h2>Remote</h2><span id="remote-state" class="remote-state">Not connected</span></div>
+<div class="remote-tools"><button data-key="KEY_HOME" title="Open the monitor Home menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8M6 9v11h5v-6h3v6h4V9"/></svg><span>Home</span></button><button data-key="KEY_SOURCE" title="Open Sources on the physical monitor"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 22h8M12 18v4M5 11h9m-3-3 3 3-3 3"/></svg><span>Sources menu</span></button></div>
+<div class="dpad" aria-label="Monitor navigation"><button data-key="KEY_UP" class="up" aria-label="Remote up">⌃</button><button data-key="KEY_LEFT" class="left" aria-label="Remote left">‹</button><button data-key="KEY_ENTER" class="ok" aria-label="Remote OK">OK</button><button data-key="KEY_RIGHT" class="right" aria-label="Remote right">›</button><button data-key="KEY_DOWN" class="down" aria-label="Remote down">⌄</button></div>
+<div class="remote-bottom"><button data-key="KEY_RETURN">↶ Back</button><button data-key="KEY_MENU">Settings menu</button></div>
+<div class="remote-message"><span id="remote-hint">Connect to use the remote</span><button id="pair">Connect remote</button></div>
+</section>
+</div>
+<footer role="status" aria-live="polite"><span id="notice">Waiting for your monitor…</span><span id="last-read"></span></footer>
+</main><script src="monitor.js"></script></body></html>

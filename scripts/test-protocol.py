@@ -20,16 +20,19 @@ def wait_for(predicate):
   raise AssertionError('module response deadline')
  finally: selector.close()
 try:
- send('hello',features=['actions-v1','panels-v1','dashboard-v1','diagrams-v1'])
+ send('hello',features=['actions-v1','panels-v1','dashboard-v1','custom-views-v1'])
  ready=wait_for(lambda m:m['type']=='ready');assert 'actions-v1' in ready['features']
  snap=wait_for(lambda m:m['type']=='snapshot')['snapshot']
- assert snap['panels'][0]['diagrams'][0]['width']/snap['panels'][0]['diagrams'][0]['height']==16/9
+ assert len(snap['panels'])==1 and snap['panels'][0]['id']=='monitor'
+ assert snap['panels'][0]['customView']['entry']=='monitor/index.html'
+ assert len(json.dumps(snap['panels'][0]['customView']['state']).encode())<32768
+ assert not snap['actions']
  assert len(snap['activity'])<=100
  request=str(uuid.uuid4())
  send('bus',bus=dict(operation='execute',requestID=request,address=dict(plugin=plugin,name='set_volume'),values=dict(device='invalid',volume=-1)))
  result=wait_for(lambda m:m['type']=='bus' and m.get('bus',{}).get('requestID','').lower()==request.lower())
  assert result['bus']['update']['phase']=='failed'
- print('PASS: handshake, 16:9 snapshot, status line, invalid action rejected without a write.')
+ print('PASS: handshake, single custom monitor view, bounded state, status line, invalid action rejected without a write.')
 finally:
  p.stdin.close()
  try:p.wait(timeout=3)

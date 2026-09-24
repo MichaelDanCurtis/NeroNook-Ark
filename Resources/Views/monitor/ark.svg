@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 220">
+<defs><linearGradient id="frame" x2="0" y2="1"><stop stop-color="#647284"/><stop offset=".3" stop-color="#242d39"/><stop offset="1" stop-color="#101820"/></linearGradient><linearGradient id="screen" x2="1" y2="1"><stop stop-color="#1a2941"/><stop offset=".45" stop-color="#1e375e"/><stop offset="1" stop-color="#101d31"/></linearGradient><linearGradient id="violet" x2="1" y2=".3"><stop stop-color="#6e87df" stop-opacity="0"/><stop offset=".45" stop-color="#a6bcff" stop-opacity=".45"/><stop offset="1" stop-color="#749dc9" stop-opacity="0"/></linearGradient><linearGradient id="stand" x2="1" y2=".3"><stop stop-color="#4d5969"/><stop offset=".5" stop-color="#222f40"/><stop offset="1" stop-color="#4b596d"/></linearGradient><clipPath id="screen-cut"><path d="M25 15Q189 37 355 15V157Q190 179 25 157Z"/></clipPath></defs>
+<ellipse cx="191" cy="210" rx="98" ry="6" fill="#050910" opacity=".6"/>
+<path d="M178 157h27v36l61 12v5H117v-5l61-12Z" fill="url(#stand)" stroke="#6a7689" stroke-opacity=".4"/>
+<path d="M177 174h28v21l-16 5-12-5Z" fill="#151e2c"/>
+<!-- Curved display silhouette. The abstract panel is decorative, not live content. -->
+<path d="M18 8Q190 31 362 8V163Q190 188 18 163Z" fill="url(#frame)" stroke="#738196" stroke-opacity=".7" stroke-width="1"/>
+<path d="M25 15Q189 37 355 15V157Q190 179 25 157Z" fill="url(#screen)"/>
+<g clip-path="url(#screen-cut)" fill="none"><path d="M-18 137C75 145 65 5 164 65S218 200 390 54" stroke="url(#violet)" stroke-width="49"/><path d="M-12 123C67 147 93 37 158 68S242 184 390 49" stroke="#a5c0fa" stroke-opacity=".3" stroke-width="1.4"/><path d="M-11 114C82 146 97 21 163 60S242 175 390 39" stroke="#8caee3" stroke-opacity=".18" stroke-width="1"/><path d="M-5 134C81 162 98 54 160 79S254 201 386 73" stroke="#8caee3" stroke-opacity=".17" stroke-width="1"/></g>
+<path d="M20 166Q188 190 360 166" fill="none" stroke="#94a0b0" stroke-opacity=".26"/><circle cx="191" cy="179" r="1.3" fill="#bdd4ec"/>
+</svg>

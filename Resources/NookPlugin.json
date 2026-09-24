@@ -1,8 +1,8 @@
 {
   "id": "cafe.nero.plugin.ark",
   "name": "Odyssey Ark",
-  "version": "0.1.0",
-  "summary": "Direct local monitor status, verified audio controls and a paired Samsung remote.",
+  "version": "0.2.0",
+  "summary": "Sound and a paired remote directly in your Nook, with live monitor read-back.",
   "capabilities": [
     "Discovers Samsung monitors on the local network",
     "Reads identity and audio state directly over local HTTP",

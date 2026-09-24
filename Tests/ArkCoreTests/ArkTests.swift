@@ -85,4 +85,43 @@ final class ArkTests: XCTestCase {
         let command = try JSONSerialization.jsonObject(with: RemoteKey.back.payload) as! [String: Any]
         XCTAssertEqual((command["params"] as? [String:String])?["DataOfCmd"], "KEY_RETURN")
     }
+    func testRelativeVolumeUsesFreshReadingAndOnlyOneWrite() async throws {
+        let before = volume.replacingOccurrences(of: ">23<", with: ">52<")
+        let after = volume.replacingOccurrences(of: ">23<", with: ">53<")
+        let transport = StubHTTP([info, before, mute, "<SetVolumeResponse/>", after, mute])
+        let result = try await ArkClient(transport: transport).change(Endpoint("192.168.1.153"), id: "fixture-monitor", service: service, command: .adjustVolume(1))
+        XCTAssertEqual(result.volume, 53)
+        let requests = await transport.requests
+        let writes = requests.filter { $0.value(forHTTPHeaderField: "SOAPAction")?.contains("#Set") == true }
+        XCTAssertEqual(writes.count, 1)
+        XCTAssertTrue(String(decoding: writes[0].httpBody!, as: UTF8.self).contains("<DesiredVolume>53</DesiredVolume>"))
+    }
+    func testRelativeBoundsAndInvalidCommands() throws {
+        XCTAssertEqual(try AudioCommand.adjustVolume(1).desiredValue(after: .init(volume: 100, muted: false)), 100)
+        XCTAssertEqual(try AudioCommand.adjustVolume(-1).desiredValue(after: .init(volume: 0, muted: false)), 0)
+        XCTAssertThrowsError(try AudioCommand.adjustVolume(1).desiredValue(after: .init(volume: nil, muted: false)))
+        XCTAssertThrowsError(try AudioCommand.adjustVolume(0).validate())
+        XCTAssertThrowsError(try AudioCommand.adjustVolume(10).validate())
+        XCTAssertThrowsError(try AudioCommand.volume(101).validate())
+    }
+    func testInvalidStepDoesNotContactMonitor() async throws {
+        let transport = StubHTTP([])
+        do { _ = try await ArkClient(transport: transport).change(Endpoint("192.168.1.153"), id: "fixture-monitor", service: service, command: .adjustVolume(0)); XCTFail("invalid step") } catch {}
+        let count = await transport.requests.count; XCTAssertEqual(count, 0)
+    }
+    func testSameValueMuteHasReadbackAndDoesNotWriteVolume() async throws {
+        let transport = StubHTTP([info, volume, mute, "<SetMuteResponse/>", volume, mute])
+        let result = try await ArkClient(transport: transport).change(Endpoint("192.168.1.153"), id: "fixture-monitor", service: service, command: .mute(false))
+        XCTAssertEqual(result.muted, false); XCTAssertEqual(result.volume, 23)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.filter { $0.value(forHTTPHeaderField: "SOAPAction")?.contains("#SetMute") == true }.count, 1)
+        XCTAssertFalse(requests.contains { $0.value(forHTTPHeaderField: "SOAPAction")?.contains("#SetVolume") == true })
+    }
+    func testStaleViewTargetIsRejectedBeforeDispatch() throws {
+        XCTAssertNoThrow(try ControlTarget.validate(device: "ark", host: "192.168.1.153", selectedDevice: "ark", selectedHost: "192.168.1.153", connected: true))
+        for (id, host, connected) in [("other", "192.168.1.153", true), ("ark", "192.168.1.154", true), ("ark", "192.168.1.153", false), ("", "192.168.1.153", true)] {
+            XCTAssertThrowsError(try ControlTarget.validate(device: id, host: host, selectedDevice: "ark", selectedHost: "192.168.1.153", connected: connected))
+        }
+    }
+
 }
