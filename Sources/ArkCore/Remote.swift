@@ -4,8 +4,9 @@ import CryptoKit
 
 public enum RemoteKey: String, CaseIterable, Sendable {
     case up = "KEY_UP", down = "KEY_DOWN", left = "KEY_LEFT", right = "KEY_RIGHT", enter = "KEY_ENTER", back = "KEY_RETURN", menu = "KEY_MENU", home = "KEY_HOME", source = "KEY_SOURCE"
+    case hdmi1 = "KEY_HDMI1", hdmi2 = "KEY_HDMI2", displayPort = "KEY_DP"
     public var title: String {
-        switch self { case .up: "Up"; case .down: "Down"; case .left: "Left"; case .right: "Right"; case .enter: "OK"; case .back: "Back"; case .menu: "Settings"; case .home: "Home"; case .source: "Sources" }
+        switch self { case .up: "Up"; case .down: "Down"; case .left: "Left"; case .right: "Right"; case .enter: "OK"; case .back: "Back"; case .menu: "Settings"; case .home: "Home"; case .source: "Sources"; case .hdmi1: "HDMI 1 request"; case .hdmi2: "HDMI 2 request"; case .displayPort: "DisplayPort request" }
     }
     public var payload: Data { try! JSONSerialization.data(withJSONObject: ["method": "ms.remote.control", "params": ["Cmd": "Click", "DataOfCmd": rawValue, "Option": "false", "TypeOfRemote": "SendRemoteKey"]]) }
 }
