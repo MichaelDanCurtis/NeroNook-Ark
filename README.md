@@ -1,3 +1,11 @@
+**October 19 · local 0.4.3:** Nearly Nothing refinement: softer shared glass and controls, compact fit review and paired Light/Dark. Local package installed; visual checks do not imply fresh audio, device or network acceptance. [Evidence and limits](../NeroNook/reports/nearly-nothing-refinement-2026-10-18/README.md). No public update.
+
+**October 18 · local 0.4.2 installed:** shared glass, paired Light/Dark, independent bundled presence/particle artwork and component motion. Saved connection/settings remain scoped to this plugin. [Rollout evidence and limits](../NeroNook/reports/redesign-ember-2026-10-18/README.md). No public release.
+
+**October 17–18 · local 0.4.1 installed:** Recovered polls clear only their transient warning; command and pairing notices survive. 25 tests, signed package/process checks and actual Light/Dark refresh pass. Settings stay byte-identical; source following stays Off. [Evidence and limits](reports/rough-edges-2026-10-17/README.md). No public update.
+
+**October 14 · 0.4.0 installed:** the primary card adds configurable keyboard-channel inputs, one-shot Test, owner verification and explicit source following through permitted SDK events. Default mapping is 1 → HDMI 1, 2 → DisplayPort, 3 → HDMI 2. Following is Off pending physical verification; commands are unacknowledged. [Delivery evidence](reports/easy-switch-2026-10-14/README.md).
+
 # Ark 0.3.0 volume integration
 
 Ark can now handle Mac volume keys and Nero's volume display through the generic `volume-v1` SDK. Install host 0.24.0 or later, then choose Odyssey Ark in NeroNook Settings → HUD → Volume control while the Ark audio output is selected. Enable Replace system HUD and give NeroNook macOS Accessibility access for media keys. Other outputs retain their own controls; this does not add a native macOS Sound slider.

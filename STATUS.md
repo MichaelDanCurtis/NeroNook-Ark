@@ -1,3 +1,5 @@
+**October 17–18 · local 0.4.1 installed:** Recovered polls clear only their transient warning; command and pairing notices survive. 25 tests, signed package/process checks and actual Light/Dark refresh pass. Settings stay byte-identical; source following stays Off. [Evidence and limits](reports/rough-edges-2026-10-17/README.md). No public update.
+
 # Ark 0.3.0 shared volume acceptance
 
 September 24, 2026. Installed independently with host 0.24.0. The optional volume-v1 interface advertises the exact saved monitor as a physical endpoint. It returns confirmed normalized volume/mute with the device read time, accepts only fresh negotiated commands and refuses repeated IDs, stale targets and expired gestures. Relative steps and mute toggles read the device first. The deadline is checked again before a setting write; nothing is queued or retried. Volume preserves mute. Standalone and older-host behavior remain available.

@@ -4,7 +4,7 @@ import NookPluginSDK
 import ArkCore
 
 let moduleID = "cafe.nero.plugin.ark"
-struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: String? }
+struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: String?; var sourceMapping: KeyboardSourceMapping?; var keyboardLink: KeyboardSourceLink? }
 @MainActor final class ArkModule: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var settings = Settings()
     @Published var draftHost = ""
@@ -14,6 +14,10 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
     @Published var service: RenderingService?
     @Published var status = "Connect your Odyssey Ark"
     @Published var notice = ""
+    // A poll's transient problem must not replace a command outcome or pairing
+    // review. Recovery removes only this read issue, revealing the saved notice.
+    @Published private var readIssue = ""
+    var displayNotice: String { readIssue.isEmpty ? notice : readIssue }
     @Published var busy = false
     @Published var connected = false
     @Published var remoteReady = false
@@ -39,6 +43,90 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
     private var visible = true
     private var window: NSWindow?
     private var runs = Set<UUID>()
+    private var catalogDraft: [PluginCatalogEntry] = []
+    var sourcePeers: [PluginCatalogEntry] = []
+    var sourcePeerNames: [String: String] = [:]
+    private var sourceDevices: [String: String] = [:]
+    private var sourceGate = KeyboardSourceGate()
+    @Published var sourceLinkStatus = "Source following is off"
+    private var subscribedSources = Set<PluginActionAddress>()
+    private var sourceTest: InputSource?
+    var sourceLinkActive: Bool { sourceGate.isArmed }
+    var keyboardLink: KeyboardSourceLink { settings.keyboardLink ?? .init() }
+    var sourceMapping: KeyboardSourceMapping { settings.sourceMapping ?? .init() }
+    func setSourceMapping(channel: Int, source: InputSource) throws {
+        var mapping = sourceMapping; try mapping.set(channel: channel, source: source)
+        settings.sourceMapping = mapping; sourceGate.disarm(); sourceLinkStatus = "Mapping changed; enable following again."; try saveSourceMapping(); publish()
+    }
+    private func saveSourceMapping() throws {
+        guard let storage else { throw ArkError("Plugin settings storage is unavailable.") }
+        try JSONEncoder().encode(settings).write(to: storage, options: .atomic)
+    }
+    func testSource(_ source: InputSource) {
+        press(source.remoteKey, onSent: { [weak self] in self?.sourceTest = source })
+    }
+    func confirmSource(_ source: InputSource) throws {
+        guard sourceTest == source else { throw ArkError("Test this input on the physical monitor before confirming it.") }
+        var mapping = sourceMapping; mapping.confirmed.insert(source); settings.sourceMapping = mapping
+        try saveSourceMapping(); sourceTest = nil; notice = "You verified \(source.title) on this monitor."; publish()
+    }
+    func configureSourceLink(provider: String, enabled: Bool) throws {
+        guard !busy else { throw ArkError("Wait for the current monitor command.") }
+        var link = keyboardLink
+        if enabled {
+            guard sourcePeers.contains(where: { $0.address.plugin == provider }), let keyboard = sourceDevices[provider], !keyboard.isEmpty,
+                  connected, remoteReady, sourceMapping.sources.allSatisfy(sourceMapping.confirmed.contains) else {
+                throw ArkError("Allow keyboard status and choice channels in Module settings, enable its watch, and verify all mapped inputs first.")
+            }
+            link.provider = provider; link.keyboard = keyboard; link.name = sourcePeerNames[provider] ?? "Selected keyboard"
+        }
+        link.enabled = enabled; settings.keyboardLink = link; try saveSourceMapping()
+        sourceGate.disarm(); if enabled { sourceGate.arm(at: Date().timeIntervalSince1970) }
+        sourceLinkStatus = enabled ? "Following \(link.name) · fresh choices only" : "Source following is off"
+        publish()
+    }
+    private func receiveSourceBus(_ bus: PluginBusMessage) {
+        switch bus.operation {
+        case .catalog:
+            if let entries = bus.catalog {
+                if entries.isEmpty { catalogDraft = [] }; catalogDraft += entries
+            }
+            if bus.complete == true {
+                sourcePeers = catalogDraft.filter { $0.channel?.kind == .event && $0.address.name == "host_switch_choices" }
+                let desired = Set(catalogDraft.filter { entry in
+                    sourcePeers.contains(where: { peer in peer.address.plugin == entry.address.plugin }) && ["host_switch_status", "host_switch_choices"].contains(entry.address.name)
+                }.map(\.address))
+                for address in subscribedSources.subtracting(desired) { send(.init(.unsubscribe, address: address)) }
+                for address in desired.subtracting(subscribedSources) { send(.init(.subscribe, address: address)) }
+                subscribedSources = desired
+                if keyboardLink.enabled, !sourcePeers.contains(where: { $0.address.plugin == keyboardLink.provider }) {
+                    sourceGate.disarm(); sourceLinkStatus = "Keyboard access changed; enable this link again after reconnecting."
+                }
+                publish()
+            }
+        case .event where bus.address?.name == "host_switch_status":
+            guard let address = bus.address, address.name == "host_switch_status", sourcePeers.contains(where: { $0.address.plugin == address.plugin }),
+                  case .string(let device)? = bus.values?["device"], case .string(let name)? = bus.values?["name"],
+                  case .boolean(let watching)? = bus.values?["watching"] else { return }
+            sourcePeerNames[address.plugin] = name
+            if watching { sourceDevices[address.plugin] = device } else { sourceDevices[address.plugin] = nil }
+            if keyboardLink.enabled, keyboardLink.provider == address.plugin, (!watching || keyboardLink.keyboard != device) {
+                sourceGate.disarm(); sourceLinkStatus = "Keyboard watch or selection changed; enable this link again."
+            }
+            publish()
+        case .event:
+            guard keyboardLink.enabled, sourceGate.isArmed else { return }
+            guard let address = bus.address, address.name == "host_switch_choices", case .string(let event)? = bus.values?["event_id"],
+                  UUID(uuidString: event) == bus.requestID, case .string(let keyboard)? = bus.values?["device"],
+                  case .number(let channel)? = bus.values?["channel"], case .number(let observedAt)? = bus.values?["observed_at"] else { return }
+            do {
+                let source = try sourceGate.accept(id: bus.requestID, provider: address.plugin, keyboard: keyboard, channel: channel, observedAt: observedAt,
+                                                  now: Date().timeIntervalSince1970, link: keyboardLink, mapping: sourceMapping, available: connected && remoteReady && !busy)
+                sourceLinkStatus = "Channel \(Int(channel)) → \(source.title) requested"; press(source.remoteKey)
+            } catch { sourceLinkStatus = error.localizedDescription; publish() }
+        default: break
+        }
+    }
     let hosted = CommandLine.arguments.contains("--neronook-plugin")
     private var storage: URL? { try? PluginStorage.directory(id: moduleID).appendingPathComponent("settings.json") }
     var volume: String { audio?.volume.map(String.init) ?? "—" }
@@ -67,19 +155,19 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
     private func receive(_ message: PluginMessage) {
         guard message.pluginID == moduleID else { NSApp.terminate(nil); return }
         if session == nil {
-            guard message.type == "hello" else { NSApp.terminate(nil); return }; session = message.session
+            guard message.type == "hello" else { NSApp.terminate(nil); return }; session = message.session; PluginAppearanceStore.shared.beginSession(pluginID:moduleID,session:message.session)
             volumeInterface = message.features?.contains("volume-v1") == true
             customViews = message.features?.contains("custom-views-v1") == true
-            emit("ready", features: ["actions-v1", "dashboard-v1", "panels-v1"] + (customViews ? ["custom-views-v1"] : []) + (volumeInterface ? ["volume-v1"] : []))
+            emit("ready", features: ["appearance-v1", "actions-v1", "dashboard-v1", "panels-v1"] + (customViews ? ["custom-views-v1"] : []) + (volumeInterface ? ["volume-v1"] : []))
             let device = PluginParameter("device", .string)
             send(.init(.register, registration: .init(actions: [
                 .init("read_status", title: "Read Ark status", output: statusSchema),
                 .init("set_volume", title: "Set Ark volume", input: .init([device, .init("volume", .number, minimum: 0, maximum: 100)]), output: .init([.init("message", .string)]), effect: .externalChange, timeoutSeconds: 60),
                 .init("set_mute", title: "Set Ark mute", input: .init([device, .init("muted", .boolean)]), output: .init([.init("message", .string)]), effect: .externalChange, timeoutSeconds: 60)
             ], channels: [.init("status", title: "Ark status", kind: .state, schema: statusSchema)])))
-            refresh(); publish(); return
+            send(.init(.discover)); refresh(); publish(); return
         }
-        guard message.session == session else { NSApp.terminate(nil); return }
+        guard message.session == session else { NSApp.terminate(nil); return }; if message.type == "appearance" { _ = PluginAppearanceStore.shared.receive(message); return }
         if message.type == "volumeCommand", let command = message.volumeCommand {
             handleVolume(command); return
         }
@@ -90,7 +178,7 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         if message.type == "viewEvent", let event = message.viewEvent {
             do { try handleView(event) } catch { notice = error.localizedDescription }; publish(); return
         }
-        if message.type == "bus", let bus = message.bus, bus.operation == .execute { execute(bus) }
+        if message.type == "bus", let bus = message.bus { if bus.operation == .execute { execute(bus) } else { receiveSourceBus(bus) } }
     }
     private func execute(_ bus: PluginBusMessage) {
         guard bus.address?.plugin == moduleID, !runs.contains(bus.requestID), runs.count < 1000 else { finish("Duplicate request or session limit reached.", request: bus.requestID, failed: true); return }
@@ -158,13 +246,13 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
     }
     func connect() {
         guard !busy else { return }; cancelRefresh(); busy = true; remote.disconnect(); remoteReady = false; remoteConnecting = false; remoteStatus = "Remote not connected"
-        connected = false; audio = nil; service = nil; notice = "Checking the monitor…"
+        connected = false; audio = nil; service = nil; readIssue = ""; notice = "Checking the monitor…"
         let host = draftHost.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             defer { busy = false; publish() }
             do {
                 let endpoint = try Endpoint(host), value = try await client.info(endpoint)
-                settings = .init(host: endpoint.host, deviceID: value.id, certificate: settings.deviceID == value.id ? settings.certificate : nil); certificateCandidate = ""; info = value
+                settings = .init(host: endpoint.host, deviceID: value.id, certificate: settings.deviceID == value.id ? settings.certificate : nil, sourceMapping: settings.deviceID == value.id ? settings.sourceMapping : nil, keyboardLink: settings.deviceID == value.id ? settings.keyboardLink : nil); certificateCandidate = ""; info = value
                 guard let storage else { throw ArkError("Could not open plugin settings storage.") }
                 try JSONEncoder().encode(settings).write(to: storage, options: .atomic)
                 try await read(endpoint); notice = "Connected to \(value.device.modelName)."
@@ -181,7 +269,7 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         refreshTask = Task {
             defer { if readGeneration == generation { refreshTask = nil; refreshing = false; publish() } }
             do { try await read(Endpoint(host), generation: generation) }
-            catch { if readGeneration == generation { fail(error) } }
+            catch { if readGeneration == generation { fail(error, fromRead: true) } }
         }
     }
     private func read(_ endpoint: Endpoint, generation: UUID? = nil) async throws {
@@ -197,10 +285,15 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         guard generation == nil || generation == readGeneration else { throw CancellationError() }
         try Task.checkCancellation()
         info = value; connected = true; service = found; audio = state; lastRead = Date()
-        if let audioError { status = "Ark connected · audio unavailable"; notice = audioError }
+        readIssue = audioError ?? ""
+        if audioError != nil { status = "Ark connected · audio unavailable" }
         else { status = "Ark · Volume \(volume)\(audio?.muted == true ? " · Muted" : "")" }
     }
-    private func fail(_ error: Error) { connected = false; audio = nil; service = nil; remote.disconnect(); remoteReady = false; remoteConnecting = false; remoteStatus = "Remote not connected"; status = "Ark unavailable"; notice = String(error.localizedDescription.prefix(350)) }
+    private func fail(_ error: Error, fromRead: Bool = false) {
+        connected = false; audio = nil; service = nil; remote.disconnect(); remoteReady = false; remoteConnecting = false; remoteStatus = "Remote not connected"; status = "Ark unavailable"
+        let message = String(error.localizedDescription.prefix(350))
+        if fromRead { readIssue = message } else { readIssue = ""; notice = message }
+    }
     func apply(volume: Int? = nil, muted: Bool? = nil, request: UUID? = nil) {
         guard (volume != nil) != (muted != nil) else { finish("Choose one audio setting.", request: request, failed: true); return }
         apply(volume.map(AudioCommand.volume) ?? .mute(muted!), request: request)
@@ -238,13 +331,13 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
         remote.disconnect(); remoteReady = false; remoteConnecting = false
         do { try PairingStore.remove(settings.deviceID); remoteStatus = "Pairing token removed from this Mac." } catch { remoteStatus = "Could not remove the pairing token." }
     }
-    func press(_ key: RemoteKey) {
+    func press(_ key: RemoteKey, onSent: (() -> Void)? = nil) {
         guard !busy, connected, remoteReady else { return }; cancelRefresh(); busy = true
         Task {
             defer { busy = false; publish() }
             do {
                 _ = try await client.info(Endpoint(settings.host), expectedID: settings.deviceID)
-                try await remote.send(key); notice = "\(key.title) sent. The monitor does not report whether it applied the key."
+                try await remote.send(key); onSent?(); notice = "\(key.title) sent. The monitor does not report whether it applied the key."
             } catch { notice = "Remote command failed; no retry was sent." }
         }
     }
@@ -267,7 +360,7 @@ struct Settings: Codable { var host = ""; var deviceID = ""; var certificate: St
     func showWindow() {
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 450), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-            w.title = "Odyssey Ark controls"; w.contentView = NSHostingView(rootView: ArkWindow(model: self)); w.isReleasedWhenClosed = false; w.center(); window = w
+            w.title = "Odyssey Ark controls"; w.contentView = NSHostingView(rootView: ArkWindow(model: self).pluginThemed()); w.isReleasedWhenClosed = false; w.center(); window = w
         }
         window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
